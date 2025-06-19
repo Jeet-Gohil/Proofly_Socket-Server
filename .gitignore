@@ -1,0 +1,52 @@
+# Dependency directories
+node_modules/
+
+# Build output
+.next/
+out/
+
+# Environment variables
+.env.local
+
+.env.development.local
+.env.test.local
+.env.production.local
+.env*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Optional IDE/editor config
+.vscode/
+.idea/
+
+# Next.js static export folder
+out/
+
+# Optional: if using next/image with local files
+public/static/
+
+# Optional: if using vercel or Netlify
+.vercel/
+.netlify/
+
+# Lock files (optional if using specific package manager)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# clerk configuration (can include secrets)
+/.clerk/
+
+/src/generated/prisma
+
+/src/generated/prisma
+
+/src/generated/prisma
