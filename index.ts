@@ -5,55 +5,96 @@ import { Server } from 'socket.io';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 
-dotenv.config(); // Load environment variables
+dotenv.config();
 
 const app = express();
-
-app.set('trust proxy', true); // ✅ Tell Express to trust reverse proxy (Render)
-
+app.set('trust proxy', true);
 app.use(cors());
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: '*', // ✅ Replace with your deployed frontend domain
+    origin: '*', // Replace with frontend domain in production
     methods: ['GET', 'POST'],
     credentials: true,
   },
   transports: ['websocket'],
 });
 
-// === Type for Geo API Response
+// === Type for the final enriched Geo data
 interface GeoIPApiResponse {
   ip: string;
-  city: string;
-  region: string;
-  country_name: string;
-  latitude: number;
-  longitude: number;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+// === Raw response from ipinfo.io
+interface IPInfoRawResponse {
+  ip: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  loc?: string; // e.g., "23.03,72.57"
   [key: string]: any;
 }
 
-// === Helper: Get real client IP (Render → Express → You)
+// === Helper: Get client IP from socket
 function getClientIP(socket: any): string {
-  const forwarded = socket.handshake.headers['x-forwarded-for'];
   let ip =
-    (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
+    socket.handshake.headers['x-forwarded-for']?.split(',')[0] ||
     socket.handshake.address ||
     '127.0.0.1';
 
-  // Remove IPv6 wrapper
   if (ip.startsWith('::ffff:')) ip = ip.replace('::ffff:', '');
 
-  // Use mock IP only in development (never in production!)
+  const isLocalIP =
+    ip === '127.0.0.1' || ip === '::1' || ip.startsWith('192.168.');
   const isMockEnabled = process.env.MOCK_GEO === 'true';
-  if ((ip === '::1' || ip === '127.0.0.1') && isMockEnabled) {
+
+  if (isLocalIP && isMockEnabled) {
     console.log('[mock] Using mock IP');
-    return '103.56.220.12'; // Indian IP for dev testing
+    return '103.56.220.12'; // Indian IP for dev
   }
 
   return ip;
+}
+
+// === Helper: Fetch geo data from ipinfo.io
+async function getGeoFromIP(ip: string): Promise<GeoIPApiResponse | null> {
+  const token = process.env.IPINFO_TOKEN;
+  if (!token) {
+    console.error('[geo] IPINFO_TOKEN missing from .env');
+    return null;
+  }
+
+  try {
+    const res = await fetch(`https://ipinfo.io/${ip}?token=f52cc9200f550d`);
+    const ip1 = await fetch(`https://ipinfo.io/27.60.17.201?token=${token}`);
+    if (!res.ok) {
+      console.warn(`[geo] ipinfo.io returned status ${res.status}`);
+      return null;
+    }
+    const geoData : IPInfoRawResponse = (await ip1.json()) as IPInfoRawResponse;
+    
+    const data: IPInfoRawResponse = (await res.json()) as IPInfoRawResponse;
+    const [latitude, longitude] = data.loc?.split(',') ?? [];
+
+    return {
+      ip: data.ip,
+      city: data.city ?? null,
+      region: data.region ?? null,
+      country: data.country ?? null,
+      latitude: latitude ? parseFloat(latitude) : null,
+      longitude: longitude ? parseFloat(longitude) : null,
+    };
+  } catch (error) {
+    console.error('[geo] Error fetching IP info:', error);
+    return null;
+  }
 }
 
 // === Socket.IO Logic
@@ -68,14 +109,9 @@ io.on('connection', (socket) => {
   socket.on('page_view', async (data) => {
     const userAgent = socket.handshake.headers['user-agent'] || 'Unknown';
     const ip = getClientIP(socket);
+    console.log('[geo] IP detected:', ip);
 
-    let geo: Partial<GeoIPApiResponse> = {};
-    try {
-      const geoRes = await fetch(`https://ipapi.co/${ip}/json/`);
-      geo = (await geoRes.json()) as Partial<GeoIPApiResponse>;
-    } catch (error) {
-      console.warn('[geo] Failed to fetch geo data for IP:', ip);
-    }
+    const geo = await getGeoFromIP(ip);
 
     const { siteId, path, timestamp, referrer, userId } = data;
     if (!siteId || !path) return;
@@ -88,13 +124,7 @@ io.on('connection', (socket) => {
       referrer,
       userAgent,
       ip,
-      geo: {
-        country: geo.country_name || null,
-        city: geo.city || null,
-        region: geo.region || null,
-        latitude: geo.latitude || null,
-        longitude: geo.longitude || null,
-      },
+      geo,
     };
 
     console.log(`[socket] Emitting live_view to siteId ${siteId}`, enrichedData);
@@ -106,7 +136,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// === Start the server
+// === Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`[server] Socket.IO listening on http://localhost:${PORT}`);
