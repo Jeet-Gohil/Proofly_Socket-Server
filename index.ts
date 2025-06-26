@@ -1,21 +1,62 @@
-import { Server } from 'socket.io';
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
+import { Server } from 'socket.io';
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
+
+dotenv.config(); // Load environment variables
 
 const app = express();
+
+app.set('trust proxy', true); // ✅ Tell Express to trust reverse proxy (Render)
+
 app.use(cors());
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: '*',   // Allow frontend
+    origin: '*', // ✅ Replace with your deployed frontend domain
     methods: ['GET', 'POST'],
+    credentials: true,
   },
-  transports: ['websocket'], // Force websocket for consistency
+  transports: ['websocket'],
 });
 
+// === Type for Geo API Response
+interface GeoIPApiResponse {
+  ip: string;
+  city: string;
+  region: string;
+  country_name: string;
+  latitude: number;
+  longitude: number;
+  [key: string]: any;
+}
+
+// === Helper: Get real client IP (Render → Express → You)
+function getClientIP(socket: any): string {
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  let ip =
+    (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
+    socket.handshake.address ||
+    '127.0.0.1';
+
+  // Remove IPv6 wrapper
+  if (ip.startsWith('::ffff:')) ip = ip.replace('::ffff:', '');
+
+  // Use mock IP only in development (never in production!)
+  const isMockEnabled = process.env.MOCK_GEO === 'true';
+  if ((ip === '::1' || ip === '127.0.0.1') && isMockEnabled) {
+    console.log('[mock] Using mock IP');
+    return '103.56.220.12'; // Indian IP for dev testing
+  }
+
+  return ip;
+}
+
+// === Socket.IO Logic
 io.on('connection', (socket) => {
   console.log('[socket] client connected:', socket.id);
 
@@ -25,25 +66,21 @@ io.on('connection', (socket) => {
   });
 
   socket.on('page_view', async (data) => {
-     const userAgent = socket.handshake.headers['user-agent'] || 'Unknown'
-    const ip = socket.handshake.address;
-    console.log(ip);
+    const userAgent = socket.handshake.headers['user-agent'] || 'Unknown';
+    const ip = getClientIP(socket);
 
+    let geo: Partial<GeoIPApiResponse> = {};
     try {
-        const geoRes = await fetch(`https://ipapi.co/${ip}/json/`);
-        const geo = geoRes.json();
-        console.log(geo);
+      const geoRes = await fetch(`https://ipapi.co/${ip}/json/`);
+      geo = (await geoRes.json()) as Partial<GeoIPApiResponse>;
+    } catch (error) {
+      console.warn('[geo] Failed to fetch geo data for IP:', ip);
     }
-    catch(err) {
 
-    }
-   
-    const { siteId, path, timestamp, referrer, userId} = data;
+    const { siteId, path, timestamp, referrer, userId } = data;
     if (!siteId || !path) return;
 
-    console.log(`[socket] Emitting live_view to siteId ${siteId}`, data);
-
-    io.to(siteId).emit('live_view', {
+    const enrichedData = {
       siteId,
       path,
       timestamp,
@@ -51,39 +88,26 @@ io.on('connection', (socket) => {
       referrer,
       userAgent,
       ip,
-    });
-  });
-  //   socket.on('heatmap_event', async (data) => {
-  //   // const {
-  //   //   userId,
-  //   //   siteId,
-  //   //   sessionId,
-  //   //   path,
-  //   //   event_type,
-  //   //   x,
-  //   //   y,
-  //   //   scroll_depth,
-  //   //   timestamp,
-  //   // } = data;
+      geo: {
+        country: geo.country_name || null,
+        city: geo.city || null,
+        region: geo.region || null,
+        latitude: geo.latitude || null,
+        longitude: geo.longitude || null,
+      },
+    };
 
-  //   try {
-  //     // const heatmap_data = await pool.query(
-  //     //   `INSERT INTO heatmap_events
-  //     //    (user_id, site_id, session_id, path, event_type, x, y, scroll_depth, timestamp)
-  //     //    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-  //     //   [userId, siteId, sessionId, path, event_type, x ?? null, y ?? null, scroll_depth ?? null, timestamp]
-  //     // );
-  //     // console.log(heatmap_data);
-  //   } catch (err) {
-  //     console.error('Error inserting heatmap event:', err);
-  //   }
-  // });
+    console.log(`[socket] Emitting live_view to siteId ${siteId}`, enrichedData);
+    io.to(siteId).emit('live_view', enrichedData);
+  });
 
   socket.on('disconnect', () => {
     console.log('[socket] client disconnected:', socket.id);
   });
 });
 
-server.listen(3001, () => {
-  console.log('[server] Socket.IO listening on http://localhost:3001');
+// === Start the server
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`[server] Socket.IO listening on http://localhost:${PORT}`);
 });
