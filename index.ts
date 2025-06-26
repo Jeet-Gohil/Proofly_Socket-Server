@@ -3,9 +3,6 @@ import express from 'express';
 import http from 'http';
 import cors from 'cors';
 
-
-
-
 const app = express();
 app.use(cors());
 
@@ -27,9 +24,21 @@ io.on('connection', (socket) => {
     console.log(`[socket] ${socket.id} joined site: ${siteId}`);
   });
 
-  socket.on('page_view', (data) => {
-    const { siteId, path, timestamp, referrer, userId } = data;
+  socket.on('page_view', async (data) => {
+     const userAgent = socket.handshake.headers['user-agent'] || 'Unknown'
+    const ip = socket.handshake.address;
+    console.log(ip);
 
+    try {
+        const geoRes = await fetch(`https://ipapi.co/${ip}/json/`);
+        const geo = geoRes.json();
+        console.log(geo);
+    }
+    catch(err) {
+
+    }
+   
+    const { siteId, path, timestamp, referrer, userId} = data;
     if (!siteId || !path) return;
 
     console.log(`[socket] Emitting live_view to siteId ${siteId}`, data);
@@ -40,6 +49,8 @@ io.on('connection', (socket) => {
       timestamp,
       userId,
       referrer,
+      userAgent,
+      ip,
     });
   });
   //   socket.on('heatmap_event', async (data) => {
