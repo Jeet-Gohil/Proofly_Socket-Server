@@ -113,11 +113,13 @@ io.on('connection', (socket) => {
 
     const geo = await getGeoFromIP(ip);
 
-    const { siteId, path, timestamp, referrer, userId } = data;
+    const { siteId, path, timestamp, referrer, userId , sessionId} = data;
     if (!siteId || !path) return;
+    console.log(sessionId);
 
     const enrichedData = {
       siteId,
+      sessionId,
       path,
       timestamp,
       userId,
